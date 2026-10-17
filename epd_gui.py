@@ -20,6 +20,7 @@ from epd_export import export_job
 from epd_writer import EpdWriter,WriteJob,JobEvent
 from epd_logging import sanitize_text,JobLog
 from epd_paths import data_dir
+from epd_history import RefreshHistory
 
 BASE=data_dir()
 
@@ -68,13 +69,20 @@ class PreviewPane(ttk.Frame):
         self.zoom=tk.StringVar(value='适应窗口')
         control=ttk.Combobox(bar,textvariable=self.zoom,values=('适应窗口','100%'),state='readonly',width=10)
         control.pack(side='right'); control.bind('<<ComboboxSelected>>',lambda e:self.render())
-        area=ttk.Frame(self); area.pack(fill='both',expand=True,pady=(8,0))
+        viewport=ttk.Frame(self); viewport.pack(fill='both',expand=True,pady=(8,0))
+        area=ttk.Frame(viewport)
         self.canvas=tk.Canvas(area,bg='#e8edf3',highlightthickness=0)
         sx=ttk.Scrollbar(area,orient='horizontal',command=self.canvas.xview)
         sy=ttk.Scrollbar(area,orient='vertical',command=self.canvas.yview)
         self.canvas.configure(xscrollcommand=sx.set,yscrollcommand=sy.set)
         self.canvas.grid(row=0,column=0,sticky='nsew'); sy.grid(row=0,column=1,sticky='ns'); sx.grid(row=1,column=0,sticky='ew')
         area.rowconfigure(0,weight=1); area.columnconfigure(0,weight=1)
+        def layout(event):
+            # Keep the actual canvas in a 2:3 portrait aspect, including on resize.
+            cw=max(1,min(event.width-sy.winfo_reqwidth(),(event.height-sx.winfo_reqheight())*2/3))
+            area.place(relx=.5,rely=.5,anchor='center',width=int(cw)+sy.winfo_reqwidth(),
+                       height=int(cw*1.5)+sx.winfo_reqheight())
+        viewport.bind('<Configure>',layout)
         self.canvas.bind('<Configure>',lambda e:self.render())
     def set_image(self,image):
         self.original=image; self.render()
@@ -99,6 +107,11 @@ class EpdApp:
         self.root=root; self.offline=offline; self.state=PreviewState(); self.queue=Queue()
         self.path=None; self.plan=None; self.worker=None; self.preview_worker=None; self.preview_pending=None
         self.pending_plan=None
+        self.active_job=None; self.history_recorded=False; self.history_loaded=False
+        history_error=None
+        try: self.history=RefreshHistory(BASE/'refresh-history.json')
+        except Exception as exc:
+            history_error=str(exc); self.history=RefreshHistory(BASE/'refresh-history.json',read_existing=False)
         self.preview_after=None; self.cancel=Event(); self.closing=False; self.started=None; self.last_log=None
         self.controls=[]; self.port_map={}; self.records={'操作日志':deque(maxlen=2000),'通信详情':deque(maxlen=2000)}
         self.config_path=BASE/'epd-gui-settings.json'
@@ -113,7 +126,7 @@ class EpdApp:
         except Exception as exc: config={}; config_error=str(exc)
         self.root.title('华为3.98寸墨水屏图片工具'+(' · 离线模式' if offline else ''))
         self.ui_scale=max(1,float(root.tk.call('tk','scaling'))*.75)
-        self.root.geometry(f'{int(1180*self.ui_scale)}x{int(820*self.ui_scale)}')
+        self.root.geometry(f'{min(int(1180*self.ui_scale),root.winfo_screenwidth()-40)}x{min(int(980*self.ui_scale),root.winfo_screenheight()-80)}')
         self.root.minsize(int(960*self.ui_scale),int(680*self.ui_scale))
         style=ttk.Style(root)
         if 'vista' in style.theme_names(): style.theme_use('vista')
@@ -132,6 +145,9 @@ class EpdApp:
         self.brightness=tk.DoubleVar(value=self._numeric(config.get('brightness',1)))
         self.contrast=tk.DoubleVar(value=self._numeric(config.get('contrast',1)))
         self.dither=tk.StringVar(value='Floyd–Steinberg' if config.get('dither') is True else '关闭')
+        self.black_white=tk.BooleanVar(value=config.get('black_white') is True)
+        value=config.get('scale_percent',100)
+        self.scale_percent=tk.DoubleVar(value=value if type(value) in (int,float) and 10<=value<=300 else 100)
         self.timing_options=(
             ('上传包间隔(ms)','packet_interval_ms',(0,20,50,100,200,500),0),
             ('刷新前等待(s)','pre_refresh_wait_s',(0,1,2,3,5,10),0),
@@ -146,7 +162,7 @@ class EpdApp:
         legacy_ports=config.get('backend_ports',{})
         preferred=legacy_ports.get('PN532','COM17') if config.get('backend')=='PM3' and isinstance(legacy_ports,dict) else config.get('port','COM17')
         self.refresh_ports(preferred)
-        for v in (self.fit,self.rotation,self.brightness,self.contrast,self.dither): v.trace_add('write',self.parameters_changed)
+        for v in (self.fit,self.rotation,self.brightness,self.contrast,self.dither,self.black_white,self.scale_percent): v.trace_add('write',self.parameters_changed)
         self.search.trace_add('write',lambda *args:self.render_logs())
         self.root.protocol('WM_DELETE_WINDOW',self.close)
         self.root.report_callback_exception=self.callback_exception
@@ -154,6 +170,8 @@ class EpdApp:
         if offline: self.local_log('离线模式：设备检测与刷图已禁用，不会打开串口。')
         if config_error: self.local_log('配置读取失败，已使用默认值：'+config_error,'WARN')
         if self.pin_error: self.local_log(self.pin_error+'；刷图已禁用。','ERROR')
+        if history_error: self.local_log('刷新历史读取失败：'+history_error,'WARN')
+        self.render_history()
         self._buttons(); self.root.after(50,self.poll)
 
     @staticmethod
@@ -184,13 +202,25 @@ class EpdApp:
         self.button(images,'选择图片',self.select_image)
         ttk.Label(images,textvariable=self.filename).pack(side='left',padx=8)
         settings=ttk.Frame(outer); settings.pack(fill='x',pady=4)
+        image_controls_start=len(self.controls)
+        self.black_white_control=ttk.Checkbutton(settings,text='黑白',variable=self.black_white)
+        self.black_white_control.pack(side='left',padx=6); self.controls.append(self.black_white_control)
         for title,var,values,width in (('适配',self.fit,('留白','裁剪'),7),('旋转',self.rotation,('0','90','180','270'),6),('抖动',self.dither,('关闭','Floyd–Steinberg'),17)):
             ttk.Label(settings,text=title).pack(side='left',padx=(6,3))
             c=ttk.Combobox(settings,textvariable=var,values=values,state='readonly',width=width); c.pack(side='left'); self.controls.append(c)
         for title,var in (('亮度',self.brightness),('对比度',self.contrast)):
             ttk.Label(settings,text=title).pack(side='left',padx=(10,2))
             slider=ttk.Scale(settings,variable=var,from_=.5,to=1.5,length=110); slider.pack(side='left'); self.controls.append(slider)
+        scaling=ttk.Frame(outer); scaling.pack(fill='x',pady=3)
+        ttk.Label(scaling,text='图片缩放(%)').pack(side='left',padx=6)
+        slider=ttk.Scale(scaling,variable=self.scale_percent,from_=10,to=300,length=220)
+        slider.pack(side='left'); self.controls.append(slider)
+        size=ttk.Spinbox(scaling,textvariable=self.scale_percent,from_=10,to=300,increment=1,width=7)
+        size.pack(side='left',padx=6); self.controls.append(size)
+        self.button(scaling,'100%',lambda:self.scale_percent.set(100))
+        ttk.Label(scaling,text='缩小居中留白 · 放大居中裁切 · 屏幕尺寸552×768').pack(side='left',padx=8)
         self.button(settings,'重置处理',self.reset)
+        self.image_controls=self.controls[image_controls_start:]
         timing=ttk.Frame(outer); timing.pack(fill='x',pady=4)
         self.timing_controls=[]
         for title,key,values,default in self.timing_options:
@@ -201,9 +231,18 @@ class EpdApp:
         self.export_png_button=self.button(export,'导出四色图片',self.export_png)
         self.export_data_button=self.button(export,'导出离线数据',self.export_data)
         self.preview_info=ttk.Label(export,text='目标 552 × 768 · 黑 / 白 / 黄 / 红'); self.preview_info.pack(side='right')
-        split=ttk.Panedwindow(outer,orient='horizontal'); split.pack(fill='both',expand=True,pady=6)
+        split=ttk.Frame(outer); split.pack(fill='both',expand=True,pady=6)
         self.original_pane=PreviewPane(split,'原图'); self.result_pane=PreviewPane(split,'实际发送的四色点阵')
-        split.add(self.original_pane,weight=1); split.add(self.result_pane,weight=1)
+        self.original_pane.grid(row=0,column=0,sticky='nsew'); self.result_pane.grid(row=0,column=1,sticky='nsew')
+        split.rowconfigure(0,weight=1); split.columnconfigure(0,weight=1,uniform='preview'); split.columnconfigure(1,weight=1,uniform='preview')
+        self.history_panel=ttk.Frame(split,padding=6,width=130)
+        self.history_panel.grid(row=0,column=2,sticky='nsew')
+        ttk.Label(self.history_panel,text='刷新历史 · 最近5张').pack()
+        self.history_buttons=[]; self.history_photos=[]
+        for index in range(5):
+            b=ttk.Button(self.history_panel,compound='top',command=lambda i=index:self.load_history(i))
+            b.pack(fill='both',expand=True,pady=2); self.history_buttons.append(b)
+        self.history_panel.bind('<Configure>',lambda event:self.render_history())
         run=ttk.Frame(outer); run.pack(fill='x',pady=(4,3))
         self.write_button=ttk.Button(run,text='开始刷图',command=self.write); self.write_button.pack(side='left',padx=3)
         self.cancel_button=ttk.Button(run,text='取消',command=self.request_cancel); self.cancel_button.pack(side='left',padx=3)
@@ -219,7 +258,7 @@ class EpdApp:
         self.log_texts={}
         for name in self.records:
             page=ttk.Frame(notebook); notebook.add(page,text=name)
-            text=tk.Text(page,height=7,font=('Consolas',9),wrap='none',state='disabled',bg='#f8fafc',relief='flat')
+            text=tk.Text(page,height=5,font=('Consolas',9),wrap='none',state='disabled',bg='#f8fafc',relief='flat')
             sy=ttk.Scrollbar(page,command=text.yview); sx=ttk.Scrollbar(page,orient='horizontal',command=text.xview)
             text.configure(yscrollcommand=sy.set,xscrollcommand=sx.set)
             text.grid(row=0,column=0,sticky='nsew'); sy.grid(row=0,column=1,sticky='ns'); sx.grid(row=1,column=0,sticky='ew')
@@ -263,6 +302,10 @@ class EpdApp:
         busy=self.state.busy
         for c in self.controls:
             c.configure(state='disabled' if busy else 'readonly' if isinstance(c,ttk.Combobox) else 'normal')
+        if self.history_loaded:
+            for c in self.image_controls: c.configure(state='disabled')
+        for i,b in enumerate(self.history_buttons):
+            b.configure(state='disabled' if busy or i>=len(self.history.entries) else 'normal')
         ready=self.state.ready and not busy
         for c in (self.export_png_button,self.export_data_button): c.configure(state='normal' if ready else 'disabled')
         connected=bool(self.port_map.get(self.port.get()))
@@ -273,16 +316,20 @@ class EpdApp:
     def select_image(self):
         filename=filedialog.askopenfilename(title='选择图片',filetypes=[('图片','*.png *.jpg *.jpeg *.bmp')])
         if filename:
+            self.history_loaded=False
             self.path=Path(filename); self.filename.set(self.path.name); self.parameters_changed()
 
     def options(self):
         return ImageOptions('cover' if self.fit.get()=='裁剪' else 'contain',int(self.rotation.get()),
-                            self.brightness.get(),self.contrast.get(),self.dither.get()!='关闭')
+                            self.brightness.get(),self.contrast.get(),self.dither.get()!='关闭',self.black_white.get(),self.scale_percent.get())
 
     def parameters_changed(self,*args):
         if self.state.busy or self.path is None: return
         version=self.state.request_preview()
-        self.preview_pending=(version,self.path,self.options())
+        try: options=self.options()
+        except (tk.TclError,ValueError):
+            self.preview_pending=None; self.status.set('请输入有效的图片缩放百分比'); self._buttons(); return
+        self.preview_pending=(version,self.path,options)
         self.status.set('正在准备四色预览…'); self._buttons()
         if self.preview_after is not None: self.root.after_cancel(self.preview_after)
         self.preview_after=self.root.after(180,self.start_preview)
@@ -301,7 +348,38 @@ class EpdApp:
         self.preview_worker=Thread(target=work,name='image-preview',daemon=True); self.preview_worker.start()
 
     def reset(self):
-        self.fit.set('留白'); self.rotation.set('0'); self.brightness.set(1); self.contrast.set(1); self.dither.set('关闭')
+        self.fit.set('留白'); self.rotation.set('0'); self.brightness.set(1); self.contrast.set(1); self.dither.set('关闭'); self.black_white.set(False); self.scale_percent.set(100)
+
+    def render_history(self):
+        if not hasattr(self,'history_buttons'): return
+        photos=[]
+        height=max(20,min(90,(self.history_panel.winfo_height()-30)//5-28))
+        for i,b in enumerate(self.history_buttons):
+            if i<len(self.history.entries):
+                image=self.history.load(i).preview_rgb.copy()
+                image.thumbnail((90,height),Image.Resampling.NEAREST)
+                photo=ImageTk.PhotoImage(image); photos.append(photo)
+                b.configure(image=photo,text=self.history.entries[i]['time'][11:19])
+            else: b.configure(image='',text='暂无记录')
+        self.history_photos=photos
+        self._buttons()
+
+    def load_history(self,index):
+        if self.state.busy or index>=len(self.history.entries): return
+        try:
+            prepared=self.history.load(index); plan=build_transfer_plan(prepared.packed)
+            version=self.state.request_preview()
+            self.preview_pending=None; self.pending_plan=None
+            if self.preview_after is not None: self.root.after_cancel(self.preview_after); self.preview_after=None
+            self.state.accept_preview(version,prepared); self.plan=plan
+            self.path=None; self.history_loaded=True
+            self.filename.set('历史点阵 · '+self.history.entries[index]['time'])
+            self.original_pane.set_image(None); self.result_pane.set_image(prepared.preview_rgb)
+            self.preview_info.configure(text='552 × 768 · 历史点阵原样载入')
+            self.status.set('历史点阵已就绪，可以导出或开始刷图')
+            self.progress_text.set(f'53个压缩块 · {len(plan.packets)}个D3子包')
+            self._buttons()
+        except Exception as exc: self.local_log('历史载入失败：'+str(exc),'ERROR')
 
     def export_png(self):
         if not self.state.ready: return
@@ -330,6 +408,7 @@ class EpdApp:
             packet_interval_s=timing['packet_interval_ms']/1000,
             pre_refresh_wait_s=timing['pre_refresh_wait_s'],power_on_delay_ms=timing['power_on_delay_ms'],
             poll_interval_s=timing['poll_interval_ms']/1000)
+        self.active_job=job; self.history_recorded=False
         self._start_task(lambda:writer.write(job,self.cancel,self.enqueue),'正在开始刷图')
 
     def _start_task(self,work,message):
@@ -354,6 +433,12 @@ class EpdApp:
 
     def process_event(self,event):
         row=event.payload; kind=event.kind; stamp=row.get('time','')[11:23]
+        if (self.active_job is not None and not self.history_recorded and
+                kind=='application_tx' and row.get('inf','').startswith('f0 d4 ')):
+            self.history_recorded=True
+            try:
+                self.history.add(self.active_job.prepared,self.filename.get()); self.render_history()
+            except Exception as exc: self.local_log('刷新历史保存失败：'+str(exc),'ERROR')
         text=json.dumps(row,ensure_ascii=False,default=str)
         level='ERROR' if kind=='error' else 'WARN' if kind=='warning' else 'INFO'
         self.records['通信详情'].append((text,level))
@@ -403,6 +488,7 @@ class EpdApp:
                     self.status.set('图片处理失败'); self.local_log(item[2],'ERROR'); self._buttons()
             elif kind=='event': self.process_event(item[1]); dirty=True
             elif kind in ('job_done','job_error'):
+                self.active_job=None
                 self.state.busy=False; self.progress.stop(); self.progress.configure(mode='determinate',value=0)
                 if self.state.resume_preview() and self.pending_plan:
                     self.plan=self.pending_plan[1]; self.pending_plan=None
@@ -417,7 +503,8 @@ class EpdApp:
                 else:
                     result=item[1]; self.last_log=result.log_directory
                     descriptions={'success':'刷图完成，设备已报告刷新完成','detected':'设备检测通过','failed':'任务失败',
-                                  'cancelled':'已取消','cleanup_failed':'设备完成，但关闭RF或串口失败' if result.device_completed else '检测结束，但清理失败'}
+                                  'cancelled':'设备已报告刷新完成' if result.device_completed else '已取消，设备最终状态未确认',
+                                  'cleanup_failed':'设备完成，但关闭RF或串口失败' if result.device_completed else '检测结束，但清理失败'}
                     self.status.set(descriptions[result.outcome])
                     self.progress_text.set(result.error or result.cleanup_error or descriptions[result.outcome])
                     if result.outcome=='success': self.progress.configure(value=100)
@@ -438,7 +525,8 @@ class EpdApp:
     def save_settings(self):
         try:
             config=dict(port=self.port_map.get(self.port.get(),''),fit=self.fit.get(),rotation=int(self.rotation.get()),
-                        brightness=self.brightness.get(),contrast=self.contrast.get(),dither=self.dither.get()!='关闭')
+                        brightness=self.brightness.get(),contrast=self.contrast.get(),dither=self.dither.get()!='关闭',
+                        black_white=self.black_white.get(),scale_percent=self.scale_percent.get())
             config.update(self.timing_values())
             self.config_path.write_text(json.dumps(config,ensure_ascii=False,indent=2),encoding='utf-8')
         except Exception as exc: self.local_log('设置保存失败：'+str(exc),'WARN')

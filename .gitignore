@@ -10,6 +10,8 @@ baseline-*/
 .analysis-tools/
 epd-device-config.json
 epd-gui-settings.json
+refresh-history.json
+refresh-history.tmp
 *.log
 test-*-result.txt
 .idea/

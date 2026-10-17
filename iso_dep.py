@@ -9,6 +9,7 @@ import time
 from protocol import crc_a, validate_crc
 
 FWT_MAX_MS = 4096 / 13560 * 2**14
+DEFAULT_MAX_WTX = 50
 
 
 class SessionError(RuntimeError):
@@ -113,7 +114,7 @@ class IsoDep:
     carries the NEXT expected N. No automatic RF reset on errors.
     """
     def __init__(self, link, *, fsc, fsd, fwt_ms, cid=None, logger=None,
-                 max_retries=2, max_wtx=20, max_frames=2048, max_inf=65536,
+                 max_retries=2, max_wtx=DEFAULT_MAX_WTX, max_frames=2048, max_inf=65536,
                  exchange_timeout_s=60, tx_inf_limit=None):
         if fsc not in (16,24,32,40,48,64,96,128,256) or fsd not in (16,24,32,40,48,64,96,128,256):
             raise ValueError('Unsupported FSC/FSD')
@@ -154,6 +155,10 @@ class IsoDep:
             self.log('isodep_link_error', error=str(exc), error_type=type(exc).__name__, retry=retry,
                      elapsed_ms=(time.monotonic()-started)*1000, rf_on=getattr(self.link,'rf_on',None))
             raise
+        if time.monotonic() >= self._deadline:
+            self.log('isodep_budget_exceeded', budget='time',frames=self._frames,
+                     elapsed_ms=(time.monotonic()-started)*1000,rf_on=getattr(self.link,'rf_on',None))
+            raise SessionError('Exchange time budget exhausted after transceive')
         try:
             if len(raw) > self.fsd:
                 raise ProtocolError('RX frame exceeds negotiated FSD')
@@ -186,6 +191,8 @@ class IsoDep:
                 return block
             self._wtx += 1
             if self._wtx > self.max_wtx:
+                self.log('isodep_budget_exceeded',budget='WTX',count=self._wtx,limit=self.max_wtx,
+                         rf_on=getattr(self.link,'rf_on',None))
                 raise SessionError('WTX budget exceeded')
             multiplier = block.inf[0] & 63
             timeout_ms = min(self.fwt_ms * multiplier, FWT_MAX_MS) + 49152/13560

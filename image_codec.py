@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import hashlib
 import warnings
+import math
 from PIL import Image, ImageOps, ImageEnhance
 
 PALETTE = ((0,0,0),(255,255,255),(245,205,0),(200,0,0))
@@ -15,6 +16,8 @@ class ImageOptions:
     brightness: float = 1.0
     contrast: float = 1.0
     dither: bool = False
+    black_white: bool = False
+    scale_percent: float = 100.0
 
 
 @dataclass(frozen=True)
@@ -42,6 +45,8 @@ def prepare_image(path: Path, options: ImageOptions) -> PreparedImage:
         raise ValueError('Invalid fit or rotation')
     if not (0.5<=options.brightness<=1.5 and 0.5<=options.contrast<=1.5):
         raise ValueError('Brightness and contrast must be within 0.5..1.5')
+    if not math.isfinite(options.scale_percent) or not 10<=options.scale_percent<=300:
+        raise ValueError('Scale must be within 10..300 percent')
     raw=Path(path).read_bytes()
     # Decode the exact bytes whose hash is recorded, even if source changes on disk.
     from io import BytesIO
@@ -60,12 +65,22 @@ def prepare_image(path: Path, options: ImageOptions) -> PreparedImage:
         small=ImageOps.contain(image,(552,768),method=Image.Resampling.LANCZOS)
         image=Image.new('RGB',(552,768),'white')
         image.paste(small,((552-small.width)//2,(768-small.height)//2))
+    if options.scale_percent!=100:
+        factor=options.scale_percent/100
+        scaled=image.resize((max(1,round(552*factor)),max(1,round(768*factor))),Image.Resampling.LANCZOS)
+        image=Image.new('RGB',(552,768),'white')
+        image.paste(scaled,((552-scaled.width)//2,(768-scaled.height)//2))
     image=ImageEnhance.Contrast(ImageEnhance.Brightness(image).enhance(options.brightness)).enhance(options.contrast)
     palette=Image.new('P',(1,1))
     # Repeat code 0 to fill Pillow's 256-entry palette, then canonicalize duplicates.
     palette.putpalette([c for rgb in PALETTE for c in rgb]+[0]*(256*3-12))
-    quantized=image.quantize(palette=palette,dither=Image.Dither.FLOYDSTEINBERG if options.dither else Image.Dither.NONE)
-    codes=bytes(v if v<4 else 0 for v in quantized.tobytes())
+    dither=Image.Dither.FLOYDSTEINBERG if options.dither else Image.Dither.NONE
+    if options.black_white:
+        monochrome=image.convert('L').convert('1',dither=dither).convert('L')
+        codes=bytes(1 if v else 0 for v in monochrome.tobytes())
+    else:
+        quantized=image.quantize(palette=palette,dither=dither)
+        codes=bytes(v if v<4 else 0 for v in quantized.tobytes())
     preview=Image.frombytes('P',(552,768),codes)
     preview.putpalette(palette.getpalette())
     return PreparedImage(source,preview.convert('RGB'),codes,pack_codes(codes),hashlib.sha256(raw).hexdigest(),options)

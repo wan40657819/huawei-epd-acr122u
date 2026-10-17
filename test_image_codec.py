@@ -5,6 +5,42 @@ from PIL import Image
 from image_codec import ImageOptions, prepare_image, pack_codes, PALETTE
 
 
+class BlackWhiteTests(unittest.TestCase):
+    def test_scale_centers_small_image_and_crops_large_image(self):
+        with TemporaryDirectory() as d:
+            p=Path(d)/'black.png'; Image.new('RGB',(552,768),'black').save(p)
+            small=prepare_image(p,ImageOptions(scale_percent=50))
+            self.assertEqual(small.preview_rgb.getpixel((0,0)),(255,255,255))
+            self.assertEqual(small.preview_rgb.getpixel((276,384)),(0,0,0))
+            large=prepare_image(p,ImageOptions(scale_percent=200))
+            self.assertEqual(set(large.codes),{0})
+            self.assertEqual(len(small.packed),105984)
+            with self.assertRaises(ValueError): prepare_image(p,ImageOptions(scale_percent=0))
+
+    def test_black_white_keeps_panel_codes_and_preview_in_sync(self):
+        with TemporaryDirectory() as d:
+            p=Path(d)/'colors.png'
+            image=Image.new('RGB',(552,768),'red')
+            image.paste('yellow',(276,0,552,768)); image.save(p)
+            for dither in (False,True):
+                result=prepare_image(p,ImageOptions(black_white=True,dither=dither))
+                self.assertLessEqual(set(result.codes),{0,1})
+                self.assertLessEqual(set(result.preview_rgb.getdata()),{PALETTE[0],PALETTE[1]})
+                self.assertEqual(len(result.packed),105984)
+                self.assertEqual(result.packed,pack_codes(result.codes))
+                self.assertEqual(result.source_rgb.getpixel((0,0)),(255,0,0))
+
+    def test_gray_dithering_and_brightness(self):
+        with TemporaryDirectory() as d:
+            p=Path(d)/'gray.png'; Image.new('RGB',(552,768),(110,110,110)).save(p)
+            plain=prepare_image(p,ImageOptions(black_white=True))
+            bright=prepare_image(p,ImageOptions(black_white=True,brightness=1.5))
+            dithered=prepare_image(p,ImageOptions(black_white=True,dither=True))
+            self.assertEqual(set(plain.codes),{0})
+            self.assertEqual(set(bright.codes),{1})
+            self.assertEqual(set(dithered.codes),{0,1})
+
+
 class ImageTests(unittest.TestCase):
     def test_scan_rotate_msb(self):
         # 2 columns x 4 rows, rotated 180; left column becomes [3,2,1,0].

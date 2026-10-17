@@ -1,5 +1,6 @@
 """Synthetic ISO-DEP peers: no hardware and no claim about target application data."""
 import unittest
+from unittest.mock import patch
 from protocol import crc_a
 from iso_dep import Block, decode, encode, IsoDep, ProtocolError, FrameError, LinkTimeout, SessionError
 
@@ -52,6 +53,37 @@ class CodecTests(unittest.TestCase):
 
 
 class StateTests(unittest.TestCase):
+    def test_wtx_counter_resets_for_each_exchange(self):
+        peer,dep=self.engine([frame('f201')]*50+[frame('0241')]+[frame('f201')]*50+[frame('0342')])
+        self.assertEqual(dep.exchange(b'x'),b'A')
+        self.assertEqual(dep.exchange(b'y'),b'B')
+        self.assertEqual(dep._wtx,50)
+
+    def test_zero_wtx_budget_does_not_echo_first_wtx(self):
+        peer,dep=self.engine([frame('f201')],max_wtx=0)
+        with self.assertRaisesRegex(SessionError,'WTX budget exceeded'): dep.exchange(b'x')
+        self.assertEqual(len(peer.sent),1)
+
+    def test_late_response_is_not_accepted_after_deadline(self):
+        peer,dep=self.engine([frame('0241')])
+        now=[100.0]
+        original=peer.transceive
+        def late(data,timeout_ms):
+            now[0]=102.0
+            return original(data,timeout_ms)
+        peer.transceive=late
+        with patch('iso_dep.time.monotonic',side_effect=lambda:now[0]):
+            with self.assertRaisesRegex(SessionError,'time budget'): dep.exchange(b'x',deadline=101.0)
+        self.assertFalse(dep.active)
+
+    def test_default_wtx_budget_accepts_50_and_rejects_51(self):
+        peer,dep=self.engine([frame('f201')]*50+[frame('0241')])
+        self.assertEqual(dep.max_wtx,50)
+        self.assertEqual(dep.exchange(b'x'),b'A')
+        peer,dep=self.engine([frame('f201')]*51)
+        with self.assertRaisesRegex(SessionError,'WTX budget exceeded'): dep.exchange(b'x')
+        self.assertFalse(dep.active)
+
     def test_short_rf_segments_preserve_full_257_byte_application(self):
         peer=Peer([frame('a2'),frame('039000')])
         dep=IsoDep(peer,fsc=256,fsd=256,fwt_ms=309.314,tx_inf_limit=240)

@@ -12,8 +12,8 @@ def run(destination):
     import epd_gui
     from epd_logging import JobLog
     from epd_protocol import build_transfer_plan
-    test_pin=bytes.fromhex('0102030405') # Synthetic offline test data only.
     from image_codec import prepare_image,ImageOptions
+    pin=bytes.fromhex('0102030405') # Synthetic offline test data only.
     target=Path(destination); target.mkdir(parents=True,exist_ok=True)
     source=target/'sample.png'; Image.new('RGB',(552,768),'white').save(source)
     root=tk.Tk(); root.withdraw()
@@ -23,15 +23,15 @@ def run(destination):
             assert root.title()=='华为3.98寸墨水屏图片工具 · 离线模式'
             assert app.title_label.cget('text')=='华为3.98寸墨水屏图片工具'
             assert not hasattr(app,'backend_control') and not hasattr(app,'client_control')
+            assert not any(hasattr(app,name) for name in ('force_power','force_rf_output','retry_on_error','force_interval_control'))
             assert not any(n.startswith('pm3_') for n in sys.modules)
             assert not app.file_logging.get() and not app.file_logging_enabled.is_set()
-            assert app.pin_error is None and len(app.pin)==5
             writer=app.task_writer(); rows=[]
-            logger=writer.log_factory(rows.append,test_pin)
+            logger=writer.log_factory(rows.append,pin)
             logger.emit('stage',message='no file')
             assert logger.directory is None
             app.file_logging.set(True); app.toggle_file_logging()
-            logger=JobLog(target/'enabled-log',rows.append,test_pin,enabled=app.file_logging_enabled.is_set)
+            logger=JobLog(target/'enabled-log',rows.append,pin,enabled=app.file_logging_enabled.is_set)
             logger.emit('stage',message='saved')
             app.file_logging.set(False); app.toggle_file_logging()
             logger.emit('stage',message='not saved')
@@ -49,11 +49,14 @@ def run(destination):
             app.result_pane.set_image(prepared.preview_rgb); root.update()
             from PIL import ImageGrab
             box=(root.winfo_rootx(),root.winfo_rooty(),root.winfo_rootx()+root.winfo_width(),root.winfo_rooty()+root.winfo_height())
-            ImageGrab.grab(bbox=box).save(target/'gui.png')
+            screenshot_error=None
+            try: ImageGrab.grab(bbox=box).save(target/'gui.png')
+            except OSError as exc: screenshot_error=str(exc)
             report=dict(ok=True,frozen=bool(getattr(sys,'frozen',False)),executable=sys.executable,
                 bundled_prefix=sys.prefix,blocks=plan.blocks,packets=len(plan.packets),
                 default_logging=False,logging_toggle=True,links=True,preview=True,
-                pn532_only=True,title=root.title(),authentication_config_valid=True)
+                pn532_only=True,title=root.title(),experimental_modes_removed=True,
+                screenshot_saved=screenshot_error is None,screenshot_error=screenshot_error)
             (target/'result.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
     except Exception:
         import traceback

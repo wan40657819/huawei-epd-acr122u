@@ -1,4 +1,4 @@
-"""Single-session application workflow. No automatic application replay."""
+"""Single-session application workflow; application commands are never automatically replayed."""
 from dataclasses import dataclass,field
 from datetime import datetime
 from pathlib import Path
@@ -11,6 +11,7 @@ from epd_logging import JobLog,sanitize_text
 from epd_export import job_metadata
 from epd_paths import data_dir
 
+from iso_dep import DEFAULT_MAX_WTX
 
 @dataclass(frozen=True)
 class WriteJob:
@@ -77,7 +78,9 @@ class EpdWriter:
         metadata=dict(port=port,backend=backend,mode='hardware-write' if job else 'hardware-read-only')
 
         def check_cancel():
-            if cancel.is_set(): raise Cancelled('已取消；设备最终状态未确认' if phase in ('refreshing','polling') else '已取消')
+            if cancel.is_set():
+                raise Cancelled('已取消；设备最终状态未确认' if phase in (
+                    'refreshing','polling') else '已取消')
 
         def stage(name,message):
             nonlocal phase
@@ -113,7 +116,8 @@ class EpdWriter:
                     refresh_command=build_refresh_command(job.power_on_delay_ms)
                     metadata['timing']=dict(packet_interval_s=job.packet_interval_s,
                         pre_refresh_wait_s=job.pre_refresh_wait_s,power_on_delay_ms=job.power_on_delay_ms,
-                        poll_interval_s=job.poll_interval_s,refresh_timeout_s=job.refresh_timeout_s)
+                        poll_interval_s=job.poll_interval_s,refresh_timeout_s=job.refresh_timeout_s,
+                        max_wtx=DEFAULT_MAX_WTX)
                     logger.emit('timing',**metadata['timing'],message=(
                         f'时序：包间隔 {job.packet_interval_s*1000:g}ms，刷新前保场 {job.pre_refresh_wait_s:g}s，'
                         f'D4上电等待 {job.power_on_delay_ms}ms，状态查询 {job.poll_interval_s*1000:g}ms'))
@@ -154,8 +158,9 @@ class EpdWriter:
                         check_cancel()
                         if self.clock()>=deadline: raise TimeoutError('屏幕刷新等待超过总预算')
                         sent_at=self.clock()
-                        done=parse_refresh_status(exchange(READ_STATUS,'刷新状态',deadline))
+                        response=exchange(READ_STATUS,'刷新状态',deadline)
                         poll_count+=1
+                        done=parse_refresh_status(response)
                         logger.emit('poll',count=poll_count,elapsed_s=self.clock()-(deadline-job.refresh_timeout_s))
                         if done:
                             completed=True
@@ -178,7 +183,8 @@ class EpdWriter:
                         logger.emit('error',message='关闭RF或串口失败：'+cleanup_error)
                         if outcome in ('success','detected'): outcome='cleanup_failed'
         summary=dict(**metadata,outcome=outcome,device_completed=completed,confirmed_packets=confirmed,
-                     error=error,cleanup_error=cleanup_error,last_stage=phase,polls=poll_count,elapsed_s=self.clock()-started)
+                     error=error,cleanup_error=cleanup_error,last_stage=phase,polls=poll_count,
+                     elapsed_s=self.clock()-started)
         logger.emit('result',**summary)
         logger.finish(summary)
         return JobResult(outcome,completed,confirmed,sanitize_text(error,pin) if error else None,

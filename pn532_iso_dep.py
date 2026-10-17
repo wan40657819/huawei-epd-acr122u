@@ -72,7 +72,8 @@ class PN532IsoDep:
                       cid=self.cid,logger=probe.log,**self.limits)
         self._configure_timeout(ats['fwt_ms']+49152/13560)
         probe.log('session_active', parameters=self.info,max_tx_inf=engine.max_tx_inf,
-                  cid=self.cid,rf_on=self.rf_on, application_exchange_verified=False)
+                  cid=self.cid,rf_on=self.rf_on,max_wtx=engine.max_wtx,
+                  exchange_timeout_s=engine.exchange_timeout_s,application_exchange_verified=False)
         self.engine=engine  # publish only after every activation step succeeds
         return self.info
 

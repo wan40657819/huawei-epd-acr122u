@@ -37,6 +37,37 @@ class Session:
         if self.close_fail: raise RuntimeError('cleanup')
 
 class WriterTests(unittest.TestCase):
+    def test_experimental_job_flags_removed(self):
+        from dataclasses import fields
+        names={f.name for f in fields(WriteJob)}
+        self.assertFalse(names & {'force_power','force_rf_output','force_poll_interval_s','retry_on_error'})
+
+    def test_refresh_failure_closes_without_replay(self):
+        for command,response in ((REFRESH,'68ca'),(READ_STATUS,'68ca'),(READ_STATUS,'6985')):
+            def configure(s):
+                original=s.exchange
+                def exchange(inf,**kw):
+                    result=original(inf,**kw)
+                    return bytes.fromhex(response) if inf==command else result
+                s.exchange=exchange
+            result,s,events=self.execute(configure)
+            self.assertEqual(result.outcome,'failed'); self.assertFalse(result.device_completed)
+            self.assertTrue(s.closed)
+            self.assertEqual(sum(inf==REFRESH for inf,kw in s.sent),1)
+            self.assertEqual(sum(inf==READ_STATUS for inf,kw in s.sent),int(command==READ_STATUS))
+
+    def test_refresh_transport_failure_closes_without_holding_or_replay(self):
+        def configure(s):
+            original=s.exchange
+            def exchange(inf,**kw):
+                result=original(inf,**kw)
+                if inf==REFRESH: raise RuntimeError('WTX budget exceeded')
+                return result
+            s.exchange=exchange
+        result,s,_=self.execute(configure)
+        self.assertEqual(result.outcome,'failed'); self.assertTrue(s.closed)
+        self.assertEqual(sum(inf==REFRESH for inf,kw in s.sent),1)
+
     def test_detect_without_file_logging_does_not_create_job_directory(self):
         with TemporaryDirectory() as d:
             target=Path(d)/'job'; session=Session(); events=[]
