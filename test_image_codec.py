@@ -22,7 +22,7 @@ class BlackWhiteTests(unittest.TestCase):
             p=Path(d)/'colors.png'
             image=Image.new('RGB',(552,768),'red')
             image.paste('yellow',(276,0,552,768)); image.save(p)
-            for dither in (False,True):
+            for dither in (False,True,'Atkinson'):
                 result=prepare_image(p,ImageOptions(black_white=True,dither=dither))
                 self.assertLessEqual(set(result.codes),{0,1})
                 self.assertLessEqual(set(result.preview_rgb.getdata()),{PALETTE[0],PALETTE[1]})
@@ -33,8 +33,8 @@ class BlackWhiteTests(unittest.TestCase):
     def test_gray_dithering_and_brightness(self):
         with TemporaryDirectory() as d:
             p=Path(d)/'gray.png'; Image.new('RGB',(552,768),(110,110,110)).save(p)
-            plain=prepare_image(p,ImageOptions(black_white=True))
-            bright=prepare_image(p,ImageOptions(black_white=True,brightness=1.5))
+            plain=prepare_image(p,ImageOptions(black_white=True,dither=False))
+            bright=prepare_image(p,ImageOptions(black_white=True,brightness=1.5,dither=False))
             dithered=prepare_image(p,ImageOptions(black_white=True,dither=True))
             self.assertEqual(set(plain.codes),{0})
             self.assertEqual(set(bright.codes),{1})

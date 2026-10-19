@@ -33,9 +33,10 @@ def main(*,screenshot=True):
     try:
         with patch.object(serial,'Serial',side_effect=AssertionError('No hardware permitted')) as serial_open:
             legacy=json.loads(old_settings) if old_settings else {}
-            legacy.update(force_power=True,force_rf_output=True,retry_on_error=True,force_poll_interval_ms=10)
+            legacy.update(force_power=True,force_rf_output=True,retry_on_error=True,force_poll_interval_ms=10,dither=True)
             settings.write_text(json.dumps(legacy),encoding='utf-8')
             app=EpdApp(root,offline=True)
+            assert app.dither.get()=='Atkinson' and app.options().dither=='Atkinson'
             assert not any(hasattr(app,name) for name in ('force_power','force_rf_output','retry_on_error','force_interval_control'))
             for title,key,values,default in app.timing_options:
                 app.timing_vars[key].set(str(default))
@@ -54,6 +55,7 @@ def main(*,screenshot=True):
             assert 'backend' not in saved and 'pm3_client' not in saved
             assert saved['packet_interval_ms']==50 and saved['pre_refresh_wait_s']==3
             assert saved['power_on_delay_ms']==2000 and saved['poll_interval_ms']==500
+            assert saved['dither']=='Atkinson'
             assert not set(saved)&{'force_power','force_rf_output','retry_on_error','force_poll_interval_ms'}
             assertions.append('PN532-only UI and updated titles; offline actions blocked')
             app.path=target/'source.png'; app.filename.set('四色测试图 · 离线验证'); app.parameters_changed()
@@ -73,6 +75,7 @@ def main(*,screenshot=True):
             assertions.append('timing values saved; job snapshot immutable; timing controls locked during tasks')
             app.fit.set('裁剪'); app.dither.set('Floyd–Steinberg')
             wait(lambda:app.state.ready)
+            assert app.state.prepared.options.dither=='Floyd–Steinberg'
             assertions.append('crop and dither controls regenerate current preview')
             app.black_white.set(True)
             wait(lambda:app.state.ready)

@@ -13,7 +13,7 @@ import webbrowser
 import tkinter as tk
 from tkinter import ttk,filedialog,messagebox
 from PIL import Image,ImageTk
-from image_codec import ImageOptions,prepare_image
+from image_codec import ImageOptions,prepare_image,DITHER_ALGORITHMS
 from epd_protocol import build_transfer_plan,load_pin
 from epd_dependencies import ensure_dependencies
 from epd_export import export_job
@@ -144,7 +144,7 @@ class EpdApp:
         self.rotation=tk.StringVar(value=str(config.get('rotation',0)) if config.get('rotation',0) in (0,90,180,270) else '0')
         self.brightness=tk.DoubleVar(value=self._numeric(config.get('brightness',1)))
         self.contrast=tk.DoubleVar(value=self._numeric(config.get('contrast',1)))
-        self.dither=tk.StringVar(value='Floyd–Steinberg' if config.get('dither') is True else '关闭')
+        self.dither=tk.StringVar(value=config.get('dither') if config.get('dither') in DITHER_ALGORITHMS else 'Atkinson')
         self.black_white=tk.BooleanVar(value=config.get('black_white') is True)
         value=config.get('scale_percent',100)
         self.scale_percent=tk.DoubleVar(value=value if type(value) in (int,float) and 10<=value<=300 else 100)
@@ -205,7 +205,7 @@ class EpdApp:
         image_controls_start=len(self.controls)
         self.black_white_control=ttk.Checkbutton(settings,text='黑白',variable=self.black_white)
         self.black_white_control.pack(side='left',padx=6); self.controls.append(self.black_white_control)
-        for title,var,values,width in (('适配',self.fit,('留白','裁剪'),7),('旋转',self.rotation,('0','90','180','270'),6),('抖动',self.dither,('关闭','Floyd–Steinberg'),17)):
+        for title,var,values,width in (('适配',self.fit,('留白','裁剪'),7),('旋转',self.rotation,('0','90','180','270'),6),('抖动',self.dither,DITHER_ALGORITHMS,17)):
             ttk.Label(settings,text=title).pack(side='left',padx=(6,3))
             c=ttk.Combobox(settings,textvariable=var,values=values,state='readonly',width=width); c.pack(side='left'); self.controls.append(c)
         for title,var in (('亮度',self.brightness),('对比度',self.contrast)):
@@ -321,7 +321,7 @@ class EpdApp:
 
     def options(self):
         return ImageOptions('cover' if self.fit.get()=='裁剪' else 'contain',int(self.rotation.get()),
-                            self.brightness.get(),self.contrast.get(),self.dither.get()!='关闭',self.black_white.get(),self.scale_percent.get())
+                            self.brightness.get(),self.contrast.get(),self.dither.get(),self.black_white.get(),self.scale_percent.get())
 
     def parameters_changed(self,*args):
         if self.state.busy or self.path is None: return
@@ -348,7 +348,7 @@ class EpdApp:
         self.preview_worker=Thread(target=work,name='image-preview',daemon=True); self.preview_worker.start()
 
     def reset(self):
-        self.fit.set('留白'); self.rotation.set('0'); self.brightness.set(1); self.contrast.set(1); self.dither.set('关闭'); self.black_white.set(False); self.scale_percent.set(100)
+        self.fit.set('留白'); self.rotation.set('0'); self.brightness.set(1); self.contrast.set(1); self.dither.set('Atkinson'); self.black_white.set(False); self.scale_percent.set(100)
 
     def render_history(self):
         if not hasattr(self,'history_buttons'): return
@@ -525,7 +525,7 @@ class EpdApp:
     def save_settings(self):
         try:
             config=dict(port=self.port_map.get(self.port.get(),''),fit=self.fit.get(),rotation=int(self.rotation.get()),
-                        brightness=self.brightness.get(),contrast=self.contrast.get(),dither=self.dither.get()!='关闭',
+                        brightness=self.brightness.get(),contrast=self.contrast.get(),dither=self.dither.get(),
                         black_white=self.black_white.get(),scale_percent=self.scale_percent.get())
             config.update(self.timing_values())
             self.config_path.write_text(json.dumps(config,ensure_ascii=False,indent=2),encoding='utf-8')
