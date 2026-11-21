@@ -144,6 +144,14 @@ class _PyscardLink:
                     hcontext,name,sc.SCARD_SHARE_EXCLUSIVE,
                     sc.SCARD_PROTOCOL_T0 | sc.SCARD_PROTOCOL_T1)
                 if hresult!=sc.SCARD_S_SUCCESS:
+                    if hresult==sc.SCARD_E_SHARING_VIOLATION:
+                        # Normal while the previous failed task is still being
+                        # released: the reader firmware waits ~1 minute for the
+                        # abandoned PN532 command before freeing the handle.
+                        raise PcscError(
+                            f'无法连接 {name}：{self._error(hresult)}；'
+                            '读卡器正被上一次任务占用，约需一分钟释放；请稍候重试或重启程序，'
+                            '不需要重新运行 enable-acr122-escape.ps1')
                     raise PcscError(
                         f'无法连接 {name}：{self._error(hresult)}；'
                         '若尚未启用 Escape 命令，请先运行 enable-acr122-escape.ps1')

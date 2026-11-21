@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import acr122_reader
-from acr122_reader import PcscPn532, PcscError, PcscEscapeDisabled, escape_hint
+from acr122_reader import PcscPn532, PcscError, PcscEscapeDisabled, _PyscardLink, escape_hint
 from epd_devices import device_backend, enumerate_devices, split_device
 import epd_writer
 
@@ -119,6 +119,30 @@ class TransportTests(unittest.TestCase):
         text=escape_hint()
         self.assertIn('EscapeCommandEnable',text)
         self.assertIn('enable-acr122-escape.ps1',text)
+
+    def test_sharing_violation_reports_draining_previous_task(self):
+        import sys
+        from types import SimpleNamespace
+        sharing=0x8010000B
+        parent=SimpleNamespace(__name__='smartcard',__path__=[])
+        fake=SimpleNamespace(
+            SCARD_SCOPE_USER=0,SCARD_S_SUCCESS=0,
+            SCARD_SHARE_DIRECT=3,SCARD_SHARE_EXCLUSIVE=2,
+            SCARD_PROTOCOL_T0=1,SCARD_PROTOCOL_T1=2,
+            SCARD_E_SHARING_VIOLATION=sharing,
+            SCardEstablishContext=lambda scope:(0,object()),
+            SCardConnect=lambda *args:(sharing,None,0),
+            SCardGetErrorMessage=lambda hresult:'sharing violation',
+            SCardDisconnect=lambda *args:0,
+            SCardReleaseContext=lambda *args:0)
+        with patch.dict(sys.modules,{'smartcard':parent,'smartcard.scard':fake}):
+            with self.assertRaises(PcscError) as raised:
+                _PyscardLink('ACS ACR122U PICC Interface 0')
+        message=str(raised.exception)
+        self.assertIn('一分钟',message)
+        self.assertIn('上一次任务占用',message)
+        self.assertIn('不需要重新运行 enable-acr122-escape.ps1',message)
+        self.assertNotIn('若尚未启用',message)
 
 
 class DeviceTests(unittest.TestCase):
