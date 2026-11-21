@@ -138,12 +138,14 @@ class EpdWriter:
                         # Empirical envelope of this reader: verified by 16
                         # complete writes at 23-42 B; larger frames collapse
                         # mid-burst, wedging the reader for ~60 s per attempt.
+                        # Advisory by maintainer's decision: remind, never block.
                         largest=max(len(p.inf) for p in job.plan.packets)
                         if largest>ACR122U_VERIFIED_INF_LIMIT:
-                            raise ValueError(
-                                f'ACR122U 已验证单包载荷上限为 {ACR122U_VERIFIED_INF_LIMIT} 字节，'
-                                f'此图片最大单包为 {largest} 字节：超过包络的包会让标签在帧内掉电并卡死读卡器。'
-                                '请使用块均匀内容（每包 ≤42 字节），照片等大载荷图片请改用串口 PN532')
+                            logger.emit('warning',stage=phase,message=(
+                                f'提醒：此图片最大单包为 {largest} 字节，超过 ACR122U 已验证的 '
+                                f'{ACR122U_VERIFIED_INF_LIMIT} 字节包络。实测超包络的包会让标签在帧内掉电，'
+                                '单次失败可能卡住读卡器约 1 分钟；照片等大载荷图片建议改用串口 PN532。'
+                                '本次仅提醒，不拦截写入。'))
                 stage('connecting',f'正在打开{backend}设备')
                 session=self.session_factory(port)
                 check_cancel()

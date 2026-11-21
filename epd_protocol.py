@@ -27,7 +27,8 @@ PN532_RF_INF_LIMIT=240
 # on the passive NFC front end (16 complete writes at 23-42 B, always 90 00);
 # 43 B and above collapses mid-frame during the 100% ASK burst (measured
 # repeatedly at 46/52/90-104/107/257 B; reader power, AGC, antenna placement and
-# packet pacing did not move the boundary).
+# packet pacing did not move the boundary). Advisory by maintainer's decision:
+# exceeding plans get a warning reminder, the write is not blocked.
 ACR122U_VERIFIED_INF_LIMIT=42
 
 

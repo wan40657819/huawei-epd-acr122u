@@ -138,25 +138,28 @@ class WriterTests(unittest.TestCase):
             self.assertEqual(result.outcome,'failed')
             self.assertFalse(s.sent); self.assertFalse(s.closed)
 
-    def test_acr122u_preflight_blocks_packets_above_verified_envelope(self):
+    def test_acr122u_envelope_reminder_warns_but_proceeds(self):
         packet=TransferPacket(bytes.fromhex('f0d3000103000011')+bytes(38),0,0,True)
         image=Image.new('RGB',(552,768),'white'); packed=b'\x55'*105984
         prepared=PreparedImage(image,image,b'\x01'*(552*768),packed,'hash',ImageOptions())
         plan=TransferPlan((packet,),hashlib.sha256(packed).hexdigest(),46,1)
-        for port,blocked in (('acr122:ACS ACR122U PICC Interface 0',True),('COM9',False)):
+        for port,reminded in (('acr122:ACS ACR122U PICC Interface 0',True),('COM9',False)):
             session=Session(); session.busy=0; clock=Clock(); events=[]
             with TemporaryDirectory() as d:
                 writer=EpdWriter(lambda port:session,
                     lambda callback,pin:JobLog(Path(d)/'job',callback,pin),clock,clock.sleep)
                 result=writer.write(WriteJob(port,prepared,plan,TEST_PIN,60),Event(),events.append)
-            if blocked:
-                self.assertEqual(result.outcome,'failed')
-                self.assertIn('42',result.error); self.assertIn('ACR122U',result.error)
-                self.assertFalse(session.sent)
-                self.assertFalse(session.closed)
+            warnings=[e for e in events if e.kind=='warning']
+            self.assertEqual(result.outcome,'success')
+            self.assertIsNone(result.error)
+            self.assertTrue(session.sent); self.assertTrue(session.closed)
+            if reminded:
+                self.assertEqual(len(warnings),1)
+                self.assertIn('42',warnings[0].payload['message'])
+                self.assertIn('46',warnings[0].payload['message'])
+                self.assertIn('提醒',warnings[0].payload['message'])
             else:
-                self.assertEqual(result.outcome,'success')
-                self.assertTrue(session.sent); self.assertTrue(session.closed)
+                self.assertEqual(warnings,[])
 
     def test_order_and_deadline(self):
         result,s,events=self.execute()
