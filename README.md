@@ -1,3 +1,11 @@
+Add ACR122U support based on the [huawei-epd-pn532](https://gitee.com/kur0neko/huawei-epd-pn532) project by kur0neko.
+
+Due to an antenna coupling issue with the ACR122U, only very simple drawings with a D3 payload < 46B can be uploaded to the e-ink panel. Additionally, power from the antenna alone is insufficient, so an external power supply is required. Both 9V and 6V were tested:
+* **9V:** Worked
+* **6V:** Failed
+
+*This work was assisted by AI.*
+
 # 划重点：若不想配置任何环境，请直接在开源页右侧下载Release版本（发行版）！双击即可运行上位机软件，一步到位
 
 # 华为3.98寸墨水屏图片工具
