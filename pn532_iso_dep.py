@@ -50,7 +50,8 @@ class PN532IsoDep:
         firmware=self.pn532.command(2)
         if len(firmware)!=4 or firmware[0]!=0x32:
             raise SessionError('Not an identified PN532')
-        probe.log('session_firmware', raw=firmware.hex(' '), baud=115200)
+        probe.log('session_firmware', raw=firmware.hex(' '),
+                  transport=getattr(self.pn532,'transport_name','PN532 HSU'))
         self.pn532.command(0x14,[1,0x14,1])
         self.pn532.command(0x12,[0x14])
         self.pn532.command(0x32,[2,0,0x0b,0x0b])
@@ -62,7 +63,14 @@ class PN532IsoDep:
         self.pn532.field(True)
         time.sleep(self.prepower_ms/1000)
         args=SimpleNamespace(stage='ats',frame_delay_ms=self.frame_delay_ms,timeout_ms_actual=102.4)
-        self.info=probe.activation(self.pn532,args)
+        try:
+            self.info=probe.activation(self.pn532,args)
+        except probe.RFStatusError as exc:
+            if exc.status==1:
+                raise SessionError(
+                    f'{exc}；未检测到墨水屏响应，请检查屏幕是否位于天线工作区以及供电/耦合是否足够'
+                    '（ACR122U 天线较小，可能无法为屏幕提供足够功率）') from exc
+            raise
         ats=self.info['ats']
         if self.cid is not None and not ats['cid_supported']:
             raise SessionError('ATS does not permit CID')
@@ -120,7 +128,7 @@ class PN532IsoDep:
             return self.engine.exchange(inf,deadline=deadline)
         finally:
             self.pn532.deadline=previous
-            if hasattr(self.pn532.s,'timeout'): self.pn532.s.timeout=0.05
+            self.pn532.reset_timeout()
 
     def check_field(self):
         """Host register read only: proves reader field configuration, not tag liveness."""
@@ -147,5 +155,5 @@ class PN532IsoDep:
             if self._started or self.rf_on: self.pn532.field(False)
             if self.saved: self.pn532.write(self.saved)
         finally:
-            self.pn532.s.close()
+            self.pn532.close()
             probe.log('session_closed',rf_on=self.rf_on)

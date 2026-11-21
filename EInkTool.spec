@@ -5,8 +5,9 @@ from PyInstaller.utils.hooks import collect_all
 base=Path(SPECPATH)
 datas=[]
 binaries=[]
-hiddenimports=['serial','serial.tools.list_ports','serial.tools.list_ports_windows','package_smoke']
-for package in ('lzokay',):
+hiddenimports=['serial','serial.tools.list_ports','serial.tools.list_ports_windows','package_smoke',
+               'acr122_reader','smartcard','smartcard.System','smartcard.scard','smartcard.pcsc']
+for package in ('lzokay','smartcard'):
     data,binary,hidden=collect_all(package)
     datas+=data; binaries+=binary; hiddenimports+=hidden
 a=Analysis([str(base/'epd_gui.py')],pathex=[str(base)],binaries=binaries,datas=datas,

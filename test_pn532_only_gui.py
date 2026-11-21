@@ -1,4 +1,4 @@
-"""PN532-only UI accepts previous settings without importing a PM3 backend."""
+"""PN532/ACR122U UI accepts previous settings without importing a PM3 backend."""
 import json
 import subprocess
 import sys

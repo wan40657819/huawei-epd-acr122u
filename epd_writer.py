@@ -10,6 +10,7 @@ from epd_protocol import (READ_INFO,READ_STATUS,parse_device_info,load_pin,
 from epd_logging import JobLog,sanitize_text
 from epd_export import job_metadata
 from epd_paths import data_dir
+from epd_devices import device_backend,split_device
 
 from iso_dep import DEFAULT_MAX_WTX
 
@@ -45,12 +46,19 @@ class JobResult:
 class Cancelled(Exception): pass
 
 
-def real_session(port):
+def real_session(device):
     from epd_dependencies import ensure_dependencies
-    ensure_dependencies(serial_required=True)
-    import wakeup_probe as probe
+    kind,target=split_device(device)
+    if kind=='acr122':
+        ensure_dependencies(pcsc_required=True)
+        from acr122_reader import PcscPn532
+        pn532=PcscPn532(target)
+    else:
+        ensure_dependencies(serial_required=True)
+        import wakeup_probe as probe
+        pn532=probe.Reader(target,full_init=True)
     from pn532_iso_dep import PN532IsoDep
-    return PN532IsoDep(probe.Reader(port,full_init=True),tx_inf_limit=PN532_RF_INF_LIMIT)
+    return PN532IsoDep(pn532,tx_inf_limit=PN532_RF_INF_LIMIT)
 
 
 def default_log_factory(callback,pin):
@@ -74,7 +82,7 @@ class EpdWriter:
         logger=self.log_factory(lambda row:emit(JobEvent(row['kind'],row)),pin)
         session=None; completed=False; confirmed=0; error=None; cleanup_error=None; outcome='failed'
         info=None; started=self.clock(); phase='connecting'; poll_count=0
-        backend=getattr(self.session_factory,'backend','PN532')
+        backend=device_backend(port)
         metadata=dict(port=port,backend=backend,mode='hardware-write' if job else 'hardware-read-only')
 
         def check_cancel():
@@ -125,7 +133,7 @@ class EpdWriter:
                         raise ValueError('预览与传输计划哈希不一致')
                     metadata.update(job_metadata(job.prepared,job.plan))
                     logger.save_preview(job.prepared.preview_rgb)
-                stage('connecting',f'正在打开{backend}串口')
+                stage('connecting',f'正在打开{backend}设备')
                 session=self.session_factory(port)
                 check_cancel()
                 stage('activating','正在唤醒并激活墨水屏')

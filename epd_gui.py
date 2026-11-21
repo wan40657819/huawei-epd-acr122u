@@ -15,11 +15,11 @@ from tkinter import ttk,filedialog,messagebox
 from PIL import Image,ImageTk
 from image_codec import ImageOptions,prepare_image,DITHER_ALGORITHMS
 from epd_protocol import build_transfer_plan,load_pin
-from epd_dependencies import ensure_dependencies
 from epd_export import export_job
 from epd_writer import EpdWriter,WriteJob,JobEvent
 from epd_logging import sanitize_text,JobLog
 from epd_paths import data_dir
+from epd_devices import enumerate_devices
 from epd_history import RefreshHistory
 
 BASE=data_dir()
@@ -51,7 +51,7 @@ class PreviewState:
     @property
     def ready(self): return self.prepared is not None and self.prepared_version==self.version
     def snapshot(self,port,plan,pin,**timing):
-        if not self.ready or self.busy or not port or plan is None: raise ValueError('图片尚未就绪或串口未选择')
+        if not self.ready or self.busy or not port or plan is None: raise ValueError('图片尚未就绪或连接设备未选择')
         # Worker never mutates images, but copy to keep snapshot isolated from Tk state.
         from dataclasses import replace
         prepared=replace(self.prepared,source_rgb=self.prepared.source_rgb.copy(),preview_rgb=self.prepared.preview_rgb.copy())
@@ -190,8 +190,8 @@ class EpdApp:
         self.title_label.pack(side='left')
         ttk.Label(top,textvariable=self.device).pack(side='right')
         conn=ttk.Frame(outer); conn.pack(fill='x',pady=(10,7))
-        ttk.Label(conn,text='PN532 串口').pack(side='left',padx=(0,8))
-        self.port_control=ttk.Combobox(conn,textvariable=self.port,state='readonly',width=30)
+        ttk.Label(conn,text='连接设备').pack(side='left',padx=(0,8))
+        self.port_control=ttk.Combobox(conn,textvariable=self.port,state='readonly',width=38)
         self.port_control.pack(side='left'); self.controls.append(self.port_control)
         self.refresh_button=self.button(conn,'刷新列表',self.refresh_ports)
         self.detect_button=self.button(conn,'检测设备',self.detect)
@@ -287,15 +287,13 @@ class EpdApp:
 
     def refresh_ports(self,preferred=None):
         if self.state.busy: return
-        previous=self.port_map.get(self.port.get(),preferred or 'COM17')
-        try:
-            ensure_dependencies(serial_required=True)
-            from serial.tools import list_ports
-            values=list(list_ports.comports())
-            self.port_map={f'{p.device} · {p.description}':p.device for p in values}
-            self.port_control['values']=list(self.port_map)
-            self.port.set(next((label for label,p in self.port_map.items() if p==previous),''))
-        except Exception as exc: self.local_log(str(exc),'ERROR')
+        previous=self.port_map.get(self.port.get(),preferred or '')
+        entries,warnings=enumerate_devices()
+        self.port_map={label:value for label,value in entries}
+        self.port_control['values']=list(self.port_map)
+        self.port.set(next((label for label,value in self.port_map.items() if value==previous),
+                           next(iter(self.port_map),'')))
+        for message in warnings: self.local_log(message,'WARN')
         self._buttons()
 
     def _buttons(self):

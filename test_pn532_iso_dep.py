@@ -36,7 +36,7 @@ class AdapterTests(unittest.TestCase):
         self.assertTrue(reader.rf_on)
         session.close(); session.close()
         self.assertFalse(reader.rf_on)
-        reader.s.close.assert_called_once()
+        reader.close.assert_called_once()
     @patch.object(probe,'log')
     @patch('pn532_iso_dep.time.sleep')
     @patch.object(probe,'activation',return_value=INFO)
@@ -66,6 +66,15 @@ class AdapterTests(unittest.TestCase):
         reader.command.assert_not_called()
     def test_unproven_cid_and_nad_not_offered(self):
         with self.assertRaises(ValueError): PN532IsoDep(Mock(),cid=3)
+
+    @patch.object(probe,'log')
+    @patch('pn532_iso_dep.time.sleep')
+    @patch.object(probe,'activation',side_effect=probe.RFStatusError('SPECIAL_WAKE_7BIT: PN532 status 01',1,{}))
+    def test_wake_timeout_has_actionable_message(self, activate, sleep, log):
+        reader,session=self.make()
+        with self.assertRaises(SessionError) as raised: session.activate()
+        self.assertIn('未检测到墨水屏',str(raised.exception))
+        session.close()
 
     @patch.object(probe,'log')
     @patch('pn532_iso_dep.time.sleep')

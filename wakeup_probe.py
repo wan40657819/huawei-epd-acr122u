@@ -37,6 +37,8 @@ class RFStatusError(RuntimeError):
         self.registers = registers
 
 class Reader:
+    transport_name = 'PN532 HSU (115200)'
+
     def __init__(self, port, *, full_init=False):
         self.s = serial.Serial(port, 115200, timeout=0.05, write_timeout=1)
         self.rf_on = False
@@ -154,6 +156,12 @@ class Reader:
         time.sleep(0.1)
         stale = self.s.read(self.s.in_waiting)
         log('hsu_abort', drained=stale.hex(' '), rf_on=self.rf_on)
+
+    def reset_timeout(self):
+        if hasattr(self.s, 'timeout'): self.s.timeout = 0.05
+
+    def close(self):
+        self.s.close()
 
 
 def diagnostics(reader):

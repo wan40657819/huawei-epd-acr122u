@@ -55,7 +55,9 @@ def run(destination):
             report=dict(ok=True,frozen=bool(getattr(sys,'frozen',False)),executable=sys.executable,
                 bundled_prefix=sys.prefix,blocks=plan.blocks,packets=len(plan.packets),
                 default_logging=False,logging_toggle=True,links=True,preview=True,
-                pn532_only=True,title=root.title(),experimental_modes_removed=True,
+                backends=['PN532 HSU','ACR122U PC/SC'],connection_selector=True,
+                connection_values=list(app.port_map.values()),
+                title=root.title(),experimental_modes_removed=True,
                 screenshot_saved=screenshot_error is None,screenshot_error=screenshot_error)
             (target/'result.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
     except Exception:

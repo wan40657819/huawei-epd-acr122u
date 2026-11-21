@@ -31,11 +31,23 @@ def main(*,screenshot=True):
             root.update(); time.sleep(.02)
         root.update()
     try:
-        with patch.object(serial,'Serial',side_effect=AssertionError('No hardware permitted')) as serial_open:
+        fake_devices=([
+            ('PN532 串口 · COM9 · 离线测试串口','COM9'),
+            ('ACR122U · ACS ACR122U PICC Interface 0','acr122:ACS ACR122U PICC Interface 0')],[])
+        with patch.object(serial,'Serial',side_effect=AssertionError('No hardware permitted')) as serial_open, \
+                patch('epd_gui.enumerate_devices',return_value=fake_devices):
             legacy=json.loads(old_settings) if old_settings else {}
             legacy.update(force_power=True,force_rf_output=True,retry_on_error=True,force_poll_interval_ms=10,dither=True)
             settings.write_text(json.dumps(legacy),encoding='utf-8')
             app=EpdApp(root,offline=True)
+            labels=list(app.port_control['values'])
+            acr_label='ACR122U · ACS ACR122U PICC Interface 0'
+            assert acr_label in labels and labels[0].startswith('PN532 串口')
+            assert app.port_map[acr_label]=='acr122:ACS ACR122U PICC Interface 0'
+            app.port.set(acr_label); app._buttons()
+            assert str(app.detect_button['state'])=='disabled'
+            app.port.set(labels[0]); app._buttons()
+            assertions.append('serial and ACR122U PC/SC devices share one connection selector; offline blocks hardware actions')
             assert app.dither.get()=='Atkinson' and app.options().dither=='Atkinson'
             assert not any(hasattr(app,name) for name in ('force_power','force_rf_output','retry_on_error','force_interval_control'))
             for title,key,values,default in app.timing_options:
@@ -57,7 +69,7 @@ def main(*,screenshot=True):
             assert saved['power_on_delay_ms']==2000 and saved['poll_interval_ms']==500
             assert saved['dither']=='Atkinson'
             assert not set(saved)&{'force_power','force_rf_output','retry_on_error','force_poll_interval_ms'}
-            assertions.append('PN532-only UI and updated titles; offline actions blocked')
+            assertions.append('PN532/ACR122U UI and updated titles; offline actions blocked')
             app.path=target/'source.png'; app.filename.set('四色测试图 · 离线验证'); app.parameters_changed()
             wait(lambda:app.state.ready)
             assertions.append('actual Tk: preview and transfer plan prepared')

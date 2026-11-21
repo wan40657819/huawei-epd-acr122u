@@ -4,14 +4,15 @@
 
 本项目由 kur0neko 以 **PolyForm Noncommercial 1.0.0** 许可公开源码，允许许可范围内的非商业使用、修改和分享，商业用途不在本许可授权范围内。详见 [LICENSE](LICENSE) 和 [NOTICE](NOTICE)。
 
-使用 PN532 为兼容的 552 × 768 四色墨水屏生成并传输图片的 Windows 桌面工具。界面支持原图与四色预览、黑白处理、图片适配与旋转、10%～300%缩放、亮度/对比度、默认Atkinson抖动（可选Floyd–Steinberg或关闭）、最近5次刷新历史、离线数据导出、上传进度和可选通信日志。
+使用 PN532（HSU 串口或 ACR122U USB PC/SC）为兼容的 552 × 768 四色墨水屏生成并传输图片的 Windows 桌面工具。界面支持原图与四色预览、黑白处理、图片适配与旋转、10%～300%缩放、亮度/对比度、默认Atkinson抖动（可选Floyd–Steinberg或关闭）、最近5次刷新历史、离线数据导出、上传进度和可选通信日志。
 
-仅支持 PN532，不包含 PM3 客户端或第三方应用。项目基于现有设备的协议研究，未声称兼容所有同尺寸屏幕，也不是华为官方软件。
+仅支持 PN532 系列读写器（HSU 串口或 ACR122U 的 PC/SC 直通），不包含 PM3 客户端或第三方应用。项目基于现有设备的协议研究，未声称兼容所有同尺寸屏幕，也不是华为官方软件。
 
 ## 硬件与环境
 
 - 屏幕配置：552 × 768，黑/白/黄/红，支持本项目采用的图像压缩和命令格式。
 - PN532 使用 HSU/UART 串口通信，115200 波特率。Windows 需要正确识别设备串口；板子供电与射频耦合必须满足实际刷新需求。
+- ACR122U 使用 USB PC/SC（pyscard）。Windows 首次使用需以管理员身份启用该读卡器的 PC/SC Escape 命令，详见下节；程序通过 ACR122U 直通 PN532 命令发送本项目所需的 7 位唤醒帧和 ISO-DEP 数据，普通 PC/SC APDU 接口不能完成该屏幕的唤醒。
 - 源码环境建议 Python 3.14、Windows 10/11 64 位；测试环境包含 Tkinter。单文件 EXE 不要求目标电脑安装 Python。
 - 已按维护者授权内置其验证过的 5 字节认证 PIN，通常无需额外配置。维护者将其作为通用值提供，但所有同型号设备的兼容性仍需实测；程序不猜测或扫描 PIN。
 
@@ -33,6 +34,23 @@ python -m venv .venv
 
 也可在已经安装依赖的 Python 环境下双击 `start-epd-gui.cmd`。
 
+## 使用 ACR122U（USB PC/SC）
+
+1. `requirements-gui.txt` 已包含 `pyscard`，按上节安装依赖即可。
+2. **首次使用**需以管理员身份打开 PowerShell，在项目目录执行：
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\enable-acr122-escape.ps1
+   ```
+
+   脚本会为已连接的 ACR122U 在 `Device Parameters` 及其 `WudfUsbccidDriver` 子项写入 `EscapeCommandEnable=1`，然后请拔插读卡器。若不想运行脚本，也可手动在
+   `HKLM\SYSTEM\CurrentControlSet\Enum\USB\VID_072F&PID_2200\<实例>\Device Parameters`
+   和其 `WudfUsbccidDriver` 子项下新建 DWORD `EscapeCommandEnable=1`。未启用时程序会停止并显示具体注册表路径，不会静默改用其他通信方式。
+3. 启动程序，在“连接设备”中选择 `ACR122U · ACS ACR122U PICC Interface 0`，把屏幕放在读卡器天线上，先“检测设备”，再“开始刷图”。
+4. ACR122U 的天线尺寸和供电能力与独立 PN532 模块不同。开发验证中，ACR122U 能完成目标屏幕检测、本地 PIN 验证，并完成三次完整四色刷新：全黑、全红，以及黑/白/红/黄四色竖条纹（每次约 25 秒，`D4` 确认、状态轮询到完成）。多色内容需要在 GUI 时序中把“刷新前等待”设为 1 秒：不设等待时标签在 `D4` 处请求 WTX 后掉电静默；等待也不宜超过 2 秒，ACR122U 固件在较长的空闲后会自行改变射频状态。要让多色图片可靠传输，需保证每个 2000 字节块解压后内容一致（例如按块边界对齐的竖条纹），使每包保持最小 LZO 载荷；未对齐的普通图案（每包约 36–55 字节）仍会卡死，复杂照片请使用带较大天线的 PN532 模块。传输层与串口路径逐字节一致，并按串口同样的主机超时执行：失败会在数秒内结束并提示需重新检测，读卡器固件释放上一条命令约需一分钟。
+
+ACR122U 路径复用项目已验证的 PN532 寄存器、7 位唤醒、防冲突、RATS 和 ISO-DEP 代码，只把 HSU 串口传输替换为 PC/SC 直通命令。普通 PC/SC APDU 方式无法发送该屏幕需要的特殊唤醒帧，也无法保持项目验证过的应用分包。
+
 ## 可选设备认证配置
 
 默认直接使用内置 PIN，**不需要创建配置文件，也不需要手机抓包或绑定日志**。如果自己的屏幕不接受内置值，并且你已经知道正确 PIN，可以用本地配置覆盖：
@@ -48,7 +66,7 @@ notepad epd-device-config.json
 
 ## 使用流程
 
-1. 接入 PN532，选择实际串口，将屏幕放在天线工作区域。
+1. 接入 PN532 串口或 ACR122U（见“使用 ACR122U”），在“连接设备”中选择实际设备，将屏幕放在天线工作区域。
 2. 选择图片，调整适配、旋转、亮度、对比度、抖动、黑白及缩放，以右侧点阵预览为准。缩放以适配结果为100%，缩小时居中留白，放大时居中裁切；实际发送尺寸仍为552×768。两个大预览画布保持2:3竖向比例。
 3. 可先导出预览或离线数据，再执行“检测设备”。
 4. 执行“开始刷图”。默认认证、上传、触发刷新与状态查询在同一 RF 会话内完成。
@@ -73,7 +91,7 @@ notepad epd-device-config.json
 .\.venv\Scripts\python.exe -m PyInstaller --noconfirm EInkTool.spec
 ```
 
-输出 `dist/EInkTool.exe`，包含 Python、Tk、Pillow、pyserial、lzokay 和授权公开的默认 PIN，无需额外配置认证文件或安装 Python。USB 串口驱动仍需系统识别。构建不会将个人覆盖配置、日志、图片或设置打入 EXE。
+输出 `dist/EInkTool.exe`，包含 Python、Tk、Pillow、pyserial、pyscard、lzokay 和授权公开的默认 PIN，无需额外配置认证文件或安装 Python。USB 串口驱动仍需系统识别。构建不会将个人覆盖配置、日志、图片或设置打入 EXE。使用 ACR122U 时，目标电脑仍需执行一次 `enable-acr122-escape.ps1`；`build-exe.ps1` 会把该脚本复制到 `dist`。
 
 公开发行 EXE 请从本目录重新构建，以保证行为和公开源码一致。
 
@@ -88,7 +106,7 @@ notepad epd-device-config.json
 .\dist\EInkTool.exe --self-test logs/exe-self-test
 ```
 
-传输和日志测试使用合成 PIN、生成图片及串口模拟数据；配置测试还验证内置 PIN 在没有配置文件时生效。不依赖私人抓包或打开真实硬件。GUI 测试需要可用的桌面会话。模拟测试通过和 EXE 离线自检通过不代表真实设备认证或刷新通过。
+传输和日志测试使用合成 PIN、生成图片及串口模拟数据；ACR122U 传输测试注入假 PC/SC 链路，不打开真实读卡器。配置测试还验证内置 PIN 在没有配置文件时生效。不依赖私人抓包或打开真实硬件。GUI 测试需要可用的桌面会话。模拟测试通过和 EXE 离线自检通过不代表真实设备认证或刷新通过；ACR122U 实机还需要启用 Escape 命令并满足天线耦合/供电条件。
 
 ## 代码结构
 
@@ -98,8 +116,11 @@ notepad epd-device-config.json
 | `image_codec.py` | 四色量化、抖动、点阵编码 |
 | `epd_history.py` | 最近5次刷新点阵的本地保存与原样载入 |
 | `epd_protocol.py` / `epd_writer.py` | 设备信息、认证配置、图像分包和刷图工作流 |
+| `epd_devices.py` | PN532 串口与 ACR122U PC/SC 设备枚举、连接值解析 |
 | `iso_dep.py` / `pn532_iso_dep.py` | ISO-DEP 编码、状态管理和 PN532 会话 |
+| `acr122_reader.py` | ACR122U PC/SC 直通 PN532 传输（pyscard） |
 | `wakeup_probe.py` / `protocol.py` | 已验证底层 HSU/RF 通信和 CRC/激活辅助函数 |
+| `enable-acr122-escape.ps1` | ACR122U 在 Windows 上的一次性 Escape 命令注册表设置 |
 | `epd_logging.py` / `epd_paths.py` | 可选文件日志、脱敏和便携路径 |
 | `epd_export.py` / `epd_dependencies.py` | 离线导出和依赖检查 |
 | `research_cli.py` | 独立研究入口；GUI 不使用该入口 |
