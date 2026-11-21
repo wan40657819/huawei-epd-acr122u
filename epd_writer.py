@@ -6,7 +6,8 @@ import hashlib
 import time
 import math
 from epd_protocol import (READ_INFO,READ_STATUS,parse_device_info,load_pin,
-                          validate_target,require_success,parse_refresh_status,PN532_RF_INF_LIMIT,build_refresh_command)
+                          validate_target,require_success,parse_refresh_status,PN532_RF_INF_LIMIT,build_refresh_command,
+                          ACR122U_VERIFIED_INF_LIMIT)
 from epd_logging import JobLog,sanitize_text
 from epd_export import job_metadata
 from epd_paths import data_dir
@@ -133,6 +134,16 @@ class EpdWriter:
                         raise ValueError('预览与传输计划哈希不一致')
                     metadata.update(job_metadata(job.prepared,job.plan))
                     logger.save_preview(job.prepared.preview_rgb)
+                    if backend=='ACR122U':
+                        # Empirical envelope of this reader: verified by 16
+                        # complete writes at 23-42 B; larger frames collapse
+                        # mid-burst, wedging the reader for ~60 s per attempt.
+                        largest=max(len(p.inf) for p in job.plan.packets)
+                        if largest>ACR122U_VERIFIED_INF_LIMIT:
+                            raise ValueError(
+                                f'ACR122U 已验证单包载荷上限为 {ACR122U_VERIFIED_INF_LIMIT} 字节，'
+                                f'此图片最大单包为 {largest} 字节：超过包络的包会让标签在帧内掉电并卡死读卡器。'
+                                '请使用块均匀内容（每包 ≤42 字节），照片等大载荷图片请改用串口 PN532')
                 stage('connecting',f'正在打开{backend}设备')
                 session=self.session_factory(port)
                 check_cancel()
